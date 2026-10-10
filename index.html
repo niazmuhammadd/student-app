@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Data Entry</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; margin: 0; padding: 12px; background: #f2f5f9; color: #1b1b1b; }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  h2, h3 { margin: 0 0 10px; color: #1F4E78; }
+  label { display: block; font-size: 13px; margin: 10px 0 3px; color: #444; }
+  input, select { width: 100%; padding: 11px; font-size: 16px; border: 1px solid #b9c3cf; border-radius: 8px; }
+  button { padding: 11px 16px; font-size: 15px; border: 0; border-radius: 8px; background: #1F4E78; color: #fff; margin-top: 12px; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  button.ghost { background: #e3e9f0; color: #1F4E78; margin-left: 6px; }
+  button.small { padding: 6px 12px; font-size: 13px; margin-top: 8px; }
+  button.del { background: #c0392b; color: #fff; margin-left: 6px; }
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .bar button { margin: 0; }
+  .status { font-size: 13px; margin: 8px 0 12px; padding: 8px 10px; border-radius: 8px; background: #fff; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .status button { margin: 0; padding: 7px 12px; font-size: 13px; }
+  .err { color: #c0392b; font-size: 14px; min-height: 18px; }
+  .ok { color: #1e8449; font-size: 14px; min-height: 18px; }
+  .row { border-top: 1px solid #e5e9ee; padding: 10px 0; }
+  .meta { font-size: 13px; color: #555; }
+  .tag { font-size: 12px; margin-left: 6px; }
+  .tag.p { color: #b9770e; } .tag.s { color: #1e8449; } .tag.e { color: #c0392b; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login" class="card">
+    <h2>Student Data Entry</h2>
+    <label>Class</label><select id="cls"></select>
+    <label>PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="off">
+    <button onclick="login()">Open</button>
+    <p id="lerr" class="err"></p>
+    <p class="meta">The first login needs internet. After that the app works offline.</p>
+  </div>
+
+  <div id="app" hidden>
+    <div class="bar"><h2 id="title" style="margin:0"></h2><button class="ghost" onclick="logout()">Log out</button></div>
+    <div class="status"><span id="stat"></span><button onclick="sync(true)">Sync now</button></div>
+
+    <div class="card">
+      <h3 id="ftitle">Add student</h3>
+      <label>Student Name *</label><input id="name">
+      <label>Father's Name *</label><input id="father">
+      <label>Father's CNIC * (13 digits)</label><input id="fcnic" inputmode="numeric" placeholder="17301-1234567-1">
+      <label>Student CNIC / Form B (optional)</label><input id="scnic" inputmode="numeric" placeholder="17301-1234567-1">
+      <label>Mobile Number *</label><input id="mobile" inputmode="tel" placeholder="0300-1234567">
+      <button onclick="save()">Save</button>
+      <button id="cancel" class="ghost" onclick="clearForm()" hidden>Cancel</button>
+      <p id="msg"></p>
+    </div>
+
+    <div class="card">
+      <h3>Students in this class: <span id="count">0</span></h3>
+      <input id="q" placeholder="Search by name, father or mobile" oninput="render()">
+      <div id="list"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ====== PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE ======
+  const API_URL = 'https://script.google.com/macros/s/AKfycbyOMQ1nC1wvgkGbRpqWMvWuQubJrNSj9PRjhvSKVHEdihF2X-uA6CGatOIGfZFa_uePbg/exec';
+  // ============================================================
+  const CLASSES = ['Nursery', 'Prep', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
+  const CNIC = /^\d{5}-?\d{7}-?\d$/, MOB = /^(\+?92|0)3\d{2}-?\d{7}$/;
+  const $ = id => document.getElementById(id);
+  let S = null, DB = { rows: [] }, EDIT = null, syncing = false;
+
+  try { S = JSON.parse(localStorage.getItem('sd_session') || 'null'); } catch (e) {}
+  CLASSES.forEach(c => { const o = document.createElement('option'); o.textContent = c; $('cls').appendChild(o); });
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.addEventListener('online', () => { setStatus(); sync(); });
+  window.addEventListener('offline', setStatus);
+  setInterval(() => { if (S && DB.rows.some(r => r.pending)) sync(); }, 60000);
+
+  if (S) openApp();
+
+  function uuid() {
+    return (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  }
+  function persist() { localStorage.setItem('sd_db_' + S.cls, JSON.stringify(DB)); }
+  function msg(t, bad) { const m = $('msg'); m.textContent = t; m.className = bad ? 'err' : 'ok'; }
+
+  async function post(body) {
+    const r = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+    return r.json();
+  }
+
+  async function login() {
+    const cls = $('cls').value, pin = $('pin').value.trim();
+    if (API_URL.indexOf('PASTE_') === 0) { $('lerr').textContent = 'The app is not connected yet (API_URL missing).'; return; }
+    $('lerr').textContent = 'Checking...';
+    try {
+      const res = await post({ cls, pin, records: [] });
+      if (!res.ok) { $('lerr').textContent = res.error || 'Wrong class or PIN.'; return; }
+      S = { cls, pin };
+      localStorage.setItem('sd_session', JSON.stringify(S));
+      let old = null; try { old = JSON.parse(localStorage.getItem('sd_db_' + cls) || 'null'); } catch (e) {}
+      DB = old || { rows: [] };
+      mergeServer(res.list);
+      persist(); $('lerr').textContent = ''; openApp();
+    } catch (e) {
+      $('lerr').textContent = 'Could not connect. The first login needs internet.';
+    }
+  }
+
+  function openApp() {
+    try { DB = JSON.parse(localStorage.getItem('sd_db_' + S.cls) || '{"rows":[]}'); } catch (e) { DB = { rows: [] }; }
+    $('login').hidden = true; $('app').hidden = false; $('title').textContent = S.cls;
+    render(); setStatus(); sync();
+  }
+
+  function logout() {
+    const pend = DB.rows.filter(r => r.pending).length;
+    if (pend && !confirm(pend + ' record(s) are not synced yet and will stay on this phone. Log out anyway?')) return;
+    localStorage.removeItem('sd_session'); S = null; $('pin').value = '';
+    $('app').hidden = true; $('login').hidden = false; clearForm();
+  }
+
+  function mergeServer(list) {
+    const srv = {}; list.forEach(s => srv[s.id] = s);
+    DB.rows = DB.rows.filter(r => r.pending || srv[r.id]);
+    DB.rows.forEach(r => { if (!r.pending && srv[r.id]) Object.assign(r, srv[r.id]); });
+    const have = new Set(DB.rows.map(r => r.id));
+    list.forEach(s => { if (!have.has(s.id)) DB.rows.push(Object.assign({ rev: 1, pending: false }, s)); });
+  }
+
+  async function sync(manual) {
+    if (syncing || !S) return;
+    if (!navigator.onLine) { if (manual) msg('No internet. Your data is safe on this phone.', true); return; }
+    syncing = true; setStatus();
+    const sent = DB.rows.filter(r => r.pending).map(r => Object.assign({}, r));
+    try {
+      const res = await post({ cls: S.cls, pin: S.pin, records: sent.map(r => ({
+        id: r.id, name: r.name, father: r.father, fcnic: r.fcnic, scnic: r.scnic, mobile: r.mobile, del: !!r.del })) });
+      if (!res.ok) {
+        if (/PIN/.test(res.error || '')) { localStorage.removeItem('sd_session'); S = null; location.reload(); return; }
+        throw new Error(res.error);
+      }
+      const done = new Set(res.done), revOf = {}; sent.forEach(s => revOf[s.id] = s.rev);
+      DB.rows.forEach(r => {
+        if (res.failed && res.failed[r.id]) r.error = res.failed[r.id];
+        else if (done.has(r.id) && r.rev === revOf[r.id]) { r.pending = false; delete r.error; }
+      });
+      DB.rows = DB.rows.filter(r => !(r.del && !r.pending));
+      mergeServer(res.list);
+      persist(); render();
+      if (manual) msg(sent.length ? 'Synced. ' + sent.length + ' record(s) sent.' : 'Everything is up to date.');
+    } catch (e) {
+      if (manual) msg('Sync failed. Your data is safe on this phone; try again later.', true);
+    } finally { syncing = false; setStatus(); }
+  }
+
+  function setStatus() {
+    if (!S) return;
+    const pend = DB.rows.filter(r => r.pending).length;
+    $('stat').textContent = (syncing ? 'Syncing... ' : (navigator.onLine ? 'Online. ' : 'Offline. ')) +
+      (pend ? pend + ' not synced yet' : 'All synced');
+  }
+
+  function clearForm() {
+    EDIT = null; ['name', 'father', 'fcnic', 'scnic', 'mobile'].forEach(i => $(i).value = '');
+    $('ftitle').textContent = 'Add student'; $('cancel').hidden = true;
+  }
+
+  function save() {
+    const f = { name: $('name').value.trim(), father: $('father').value.trim(), fcnic: $('fcnic').value.trim(),
+                scnic: $('scnic').value.trim(), mobile: $('mobile').value.trim() };
+    const err = !f.name ? 'Enter the student name.'
+      : !f.father ? "Enter the father's name."
+      : !CNIC.test(f.fcnic) ? "Father's CNIC must be 13 digits."
+      : (f.scnic && !CNIC.test(f.scnic)) ? 'Student CNIC / Form B must be 13 digits.'
+      : !MOB.test(f.mobile) ? 'Mobile number is not valid (example 0300-1234567).' : '';
+    if (err) { msg(err, true); return; }
+    if (EDIT) {
+      const r = DB.rows.find(x => x.id === EDIT);
+      if (r) { Object.assign(r, f); r.rev++; r.pending = true; delete r.error; }
+    } else {
+      DB.rows.push(Object.assign({ id: uuid(), rev: 1, pending: true }, f));
+    }
+    persist(); clearForm(); msg('Saved on this phone.'); render(); setStatus(); sync();
+  }
+
+  function edit(r) {
+    EDIT = r.id;
+    $('name').value = r.name; $('father').value = r.father; $('fcnic').value = r.fcnic;
+    $('scnic').value = r.scnic; $('mobile').value = r.mobile;
+    $('ftitle').textContent = 'Edit student'; $('cancel').hidden = false; msg('');
+    window.scrollTo(0, 0);
+  }
+
+  function remove(r) {
+    if (!confirm('Delete ' + r.name + '?')) return;
+    r.del = true; r.rev++; r.pending = true;
+    persist(); clearForm(); render(); setStatus(); sync();
+  }
+
+  function render() {
+    const q = $('q').value.trim().toLowerCase();
+    const rows = DB.rows.filter(r => !r.del);
+    $('count').textContent = rows.length;
+    const list = $('list'); list.textContent = '';
+    rows.filter(r => !q || (r.name + ' ' + r.father + ' ' + r.mobile).toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach(r => {
+        const d = document.createElement('div'); d.className = 'row';
+        const b = document.createElement('b'); b.textContent = r.name;
+        const t = document.createElement('span');
+        t.className = 'tag ' + (r.error ? 'e' : r.pending ? 'p' : 's');
+        t.textContent = r.error ? 'Not accepted: ' + r.error : r.pending ? 'not synced' : 'synced';
+        const m = document.createElement('div'); m.className = 'meta';
+        m.textContent = 'Father: ' + r.father + ' | ' + r.mobile;
+        const e = document.createElement('button'); e.className = 'small'; e.textContent = 'Edit'; e.onclick = () => edit(r);
+        const x = document.createElement('button'); x.className = 'small del'; x.textContent = 'Delete'; x.onclick = () => remove(r);
+        d.append(b, t, m, e, x); list.appendChild(d);
+      });
+  }
+</script>
+</body>
+</html>
