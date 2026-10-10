@@ -1,5 +1,5 @@
 // Keeps the entry page available offline.
-const CACHE = 'student-entry-v1';
+const CACHE = 'student-entry-v3';
 const FILES = ['./', './index.html'];
 
 self.addEventListener('install', e => {

@@ -48,18 +48,22 @@
 
     <div class="card">
       <h3 id="ftitle">Add student</h3>
+      <label>Class (in which the student studies) *</label><select id="scls"></select>
       <label>Student Name *</label><input id="name">
       <label>Father's Name *</label><input id="father">
       <label>Father's CNIC * (13 digits)</label><input id="fcnic" inputmode="numeric" placeholder="17301-1234567-1">
       <label>Student CNIC / Form B (optional)</label><input id="scnic" inputmode="numeric" placeholder="17301-1234567-1">
       <label>Mobile Number *</label><input id="mobile" inputmode="tel" placeholder="0300-1234567">
+      <label>Date of Birth *</label><input id="dob" type="date" oninput="showAge()">
+      <div id="age" class="meta"></div>
+      <label>Date of Admission (optional)</label><input id="adm" type="date">
       <button onclick="save()">Save</button>
       <button id="cancel" class="ghost" onclick="clearForm()" hidden>Cancel</button>
       <p id="msg"></p>
     </div>
 
     <div class="card">
-      <h3>Students in this class: <span id="count">0</span></h3>
+      <h3>Students: <span id="count">0</span></h3>
       <input id="q" placeholder="Search by name, father or mobile" oninput="render()">
       <div id="list"></div>
     </div>
@@ -72,12 +76,15 @@
   const API_URL = 'https://script.google.com/macros/s/AKfycbyOMQ1nC1wvgkGbRpqWMvWuQubJrNSj9PRjhvSKVHEdihF2X-uA6CGatOIGfZFa_uePbg/exec';
   // ============================================================
   const CLASSES = ['Nursery', 'Prep', 'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
+  const OFFICE = 'Office (All Classes)';
   const CNIC = /^\d{5}-?\d{7}-?\d$/, MOB = /^(\+?92|0)3\d{2}-?\d{7}$/;
   const $ = id => document.getElementById(id);
   let S = null, DB = { rows: [] }, EDIT = null, syncing = false;
 
   try { S = JSON.parse(localStorage.getItem('sd_session') || 'null'); } catch (e) {}
-  CLASSES.forEach(c => { const o = document.createElement('option'); o.textContent = c; $('cls').appendChild(o); });
+  [OFFICE].concat(CLASSES).forEach(c => { const o = document.createElement('option'); o.textContent = c; $('cls').appendChild(o); });
+  const blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Choose class'; $('scls').appendChild(blank);
+  CLASSES.forEach(c => { const o = document.createElement('option'); o.textContent = c; $('scls').appendChild(o); });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   window.addEventListener('online', () => { setStatus(); sync(); });
@@ -89,6 +96,25 @@
   function uuid() {
     return (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
   }
+  function setClassField(v) {
+    const s = $('scls');
+    if (!S) { s.value = ''; return; }
+    if (S.cls === OFFICE) { s.disabled = false; s.value = v || ''; }
+    else { s.value = S.cls; s.disabled = true; }
+  }
+  function todayISO() {
+    const t = new Date();
+    return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+  }
+  function ageText(dob) {
+    if (!dob) return '';
+    const p = dob.split('-').map(Number), t = new Date();
+    let y = t.getFullYear() - p[0], m = t.getMonth() + 1 - p[1];
+    if (t.getDate() < p[2]) m--;
+    if (m < 0) { y--; m += 12; }
+    return y < 0 ? '' : y + ' years ' + m + ' months';
+  }
+  function showAge() { const a = ageText($('dob').value); $('age').textContent = a ? 'Age: ' + a : ''; }
   function persist() { localStorage.setItem('sd_db_' + S.cls, JSON.stringify(DB)); }
   function msg(t, bad) { const m = $('msg'); m.textContent = t; m.className = bad ? 'err' : 'ok'; }
 
@@ -117,8 +143,9 @@
 
   function openApp() {
     try { DB = JSON.parse(localStorage.getItem('sd_db_' + S.cls) || '{"rows":[]}'); } catch (e) { DB = { rows: [] }; }
+    DB.rows.forEach(r => { if (!r.cls && S.cls !== OFFICE) r.cls = S.cls; });
     $('login').hidden = true; $('app').hidden = false; $('title').textContent = S.cls;
-    render(); setStatus(); sync();
+    setClassField(''); render(); setStatus(); sync();
   }
 
   function logout() {
@@ -143,7 +170,7 @@
     const sent = DB.rows.filter(r => r.pending).map(r => Object.assign({}, r));
     try {
       const res = await post({ cls: S.cls, pin: S.pin, records: sent.map(r => ({
-        id: r.id, name: r.name, father: r.father, fcnic: r.fcnic, scnic: r.scnic, mobile: r.mobile, del: !!r.del })) });
+        id: r.id, name: r.name, father: r.father, fcnic: r.fcnic, scnic: r.scnic, mobile: r.mobile, cls: r.cls, dob: r.dob || '', adm: r.adm || '', del: !!r.del })) });
       if (!res.ok) {
         if (/PIN/.test(res.error || '')) { localStorage.removeItem('sd_session'); S = null; location.reload(); return; }
         throw new Error(res.error);
@@ -170,18 +197,23 @@
   }
 
   function clearForm() {
-    EDIT = null; ['name', 'father', 'fcnic', 'scnic', 'mobile'].forEach(i => $(i).value = '');
+    EDIT = null; ['name', 'father', 'fcnic', 'scnic', 'mobile', 'dob', 'adm'].forEach(i => $(i).value = ''); $('age').textContent = '';
+    setClassField('');
     $('ftitle').textContent = 'Add student'; $('cancel').hidden = true;
   }
 
   function save() {
     const f = { name: $('name').value.trim(), father: $('father').value.trim(), fcnic: $('fcnic').value.trim(),
-                scnic: $('scnic').value.trim(), mobile: $('mobile').value.trim() };
-    const err = !f.name ? 'Enter the student name.'
+                scnic: $('scnic').value.trim(), mobile: $('mobile').value.trim(), cls: $('scls').value,
+                dob: $('dob').value, adm: $('adm').value };
+    const err = !f.cls ? 'Choose the class in which the student studies.'
+      : !f.name ? 'Enter the student name.'
       : !f.father ? "Enter the father's name."
       : !CNIC.test(f.fcnic) ? "Father's CNIC must be 13 digits."
       : (f.scnic && !CNIC.test(f.scnic)) ? 'Student CNIC / Form B must be 13 digits.'
-      : !MOB.test(f.mobile) ? 'Mobile number is not valid (example 0300-1234567).' : '';
+      : !MOB.test(f.mobile) ? 'Mobile number is not valid (example 0300-1234567).'
+      : !f.dob ? 'Enter the date of birth.'
+      : f.dob > todayISO() ? 'Date of birth cannot be in the future.' : '';
     if (err) { msg(err, true); return; }
     if (EDIT) {
       const r = DB.rows.find(x => x.id === EDIT);
@@ -195,7 +227,7 @@
   function edit(r) {
     EDIT = r.id;
     $('name').value = r.name; $('father').value = r.father; $('fcnic').value = r.fcnic;
-    $('scnic').value = r.scnic; $('mobile').value = r.mobile;
+    $('scnic').value = r.scnic; $('mobile').value = r.mobile; $('dob').value = r.dob || ''; $('adm').value = r.adm || ''; showAge(); setClassField(r.cls);
     $('ftitle').textContent = 'Edit student'; $('cancel').hidden = false; msg('');
     window.scrollTo(0, 0);
   }
@@ -212,7 +244,7 @@
     $('count').textContent = rows.length;
     const list = $('list'); list.textContent = '';
     rows.filter(r => !q || (r.name + ' ' + r.father + ' ' + r.mobile).toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => (a.cls || '').localeCompare(b.cls || '') || a.name.localeCompare(b.name))
       .forEach(r => {
         const d = document.createElement('div'); d.className = 'row';
         const b = document.createElement('b'); b.textContent = r.name;
@@ -220,7 +252,7 @@
         t.className = 'tag ' + (r.error ? 'e' : r.pending ? 'p' : 's');
         t.textContent = r.error ? 'Not accepted: ' + r.error : r.pending ? 'not synced' : 'synced';
         const m = document.createElement('div'); m.className = 'meta';
-        m.textContent = 'Father: ' + r.father + ' | ' + r.mobile;
+        m.textContent = (S.cls === OFFICE ? (r.cls || '-') + ' | ' : '') + 'Father: ' + r.father + ' | ' + r.mobile + (ageText(r.dob) ? ' | Age: ' + ageText(r.dob) : '');
         const e = document.createElement('button'); e.className = 'small'; e.textContent = 'Edit'; e.onclick = () => edit(r);
         const x = document.createElement('button'); x.className = 'small del'; x.textContent = 'Delete'; x.onclick = () => remove(r);
         d.append(b, t, m, e, x); list.appendChild(d);
