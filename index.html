@@ -26,6 +26,8 @@
   .row { border-top: 1px solid #e5e9ee; padding: 10px 0; }
   .meta { font-size: 13px; color: #555; }
   .tag { font-size: 12px; margin-left: 6px; }
+  .row.left { background: #fdecea; }
+  .row.left b { color: #c0392b; }
   .tag.p { color: #b9770e; } .tag.s { color: #1e8449; } .tag.e { color: #c0392b; }
   [hidden] { display: none !important; }
 </style>
@@ -57,6 +59,8 @@
       <label>Date of Birth *</label><input id="dob" type="date" oninput="showAge()">
       <div id="age" class="meta"></div>
       <label>Date of Admission (optional)</label><input id="adm" type="date">
+      <label>Status</label>
+      <select id="status"><option>Active</option><option value="Left">Left (student left the school)</option></select>
       <button onclick="save()">Save</button>
       <button id="cancel" class="ghost" onclick="clearForm()" hidden>Cancel</button>
       <p id="msg"></p>
@@ -170,7 +174,7 @@
     const sent = DB.rows.filter(r => r.pending).map(r => Object.assign({}, r));
     try {
       const res = await post({ cls: S.cls, pin: S.pin, records: sent.map(r => ({
-        id: r.id, name: r.name, father: r.father, fcnic: r.fcnic, scnic: r.scnic, mobile: r.mobile, cls: r.cls, dob: r.dob || '', adm: r.adm || '', del: !!r.del })) });
+        id: r.id, name: r.name, father: r.father, fcnic: r.fcnic, scnic: r.scnic, mobile: r.mobile, cls: r.cls, dob: r.dob || '', adm: r.adm || '', status: r.status || 'Active', del: !!r.del })) });
       if (!res.ok) {
         if (/PIN/.test(res.error || '')) { localStorage.removeItem('sd_session'); S = null; location.reload(); return; }
         throw new Error(res.error);
@@ -197,7 +201,7 @@
   }
 
   function clearForm() {
-    EDIT = null; ['name', 'father', 'fcnic', 'scnic', 'mobile', 'dob', 'adm'].forEach(i => $(i).value = ''); $('age').textContent = '';
+    EDIT = null; ['name', 'father', 'fcnic', 'scnic', 'mobile', 'dob', 'adm'].forEach(i => $(i).value = ''); $('age').textContent = ''; $('status').value = 'Active';
     setClassField('');
     $('ftitle').textContent = 'Add student'; $('cancel').hidden = true;
   }
@@ -205,7 +209,7 @@
   function save() {
     const f = { name: $('name').value.trim(), father: $('father').value.trim(), fcnic: $('fcnic').value.trim(),
                 scnic: $('scnic').value.trim(), mobile: $('mobile').value.trim(), cls: $('scls').value,
-                dob: $('dob').value, adm: $('adm').value };
+                dob: $('dob').value, adm: $('adm').value, status: $('status').value };
     const err = !f.cls ? 'Choose the class in which the student studies.'
       : !f.name ? 'Enter the student name.'
       : !f.father ? "Enter the father's name."
@@ -227,7 +231,7 @@
   function edit(r) {
     EDIT = r.id;
     $('name').value = r.name; $('father').value = r.father; $('fcnic').value = r.fcnic;
-    $('scnic').value = r.scnic; $('mobile').value = r.mobile; $('dob').value = r.dob || ''; $('adm').value = r.adm || ''; showAge(); setClassField(r.cls);
+    $('scnic').value = r.scnic; $('mobile').value = r.mobile; $('dob').value = r.dob || ''; $('adm').value = r.adm || ''; $('status').value = r.status || 'Active'; showAge(); setClassField(r.cls);
     $('ftitle').textContent = 'Edit student'; $('cancel').hidden = false; msg('');
     window.scrollTo(0, 0);
   }
@@ -241,16 +245,18 @@
   function render() {
     const q = $('q').value.trim().toLowerCase();
     const rows = DB.rows.filter(r => !r.del);
-    $('count').textContent = rows.length;
+    const left = rows.filter(r => r.status === 'Left').length;
+    $('count').textContent = (rows.length - left) + ' active' + (left ? ', ' + left + ' left' : '');
     const list = $('list'); list.textContent = '';
     rows.filter(r => !q || (r.name + ' ' + r.father + ' ' + r.mobile).toLowerCase().includes(q))
       .sort((a, b) => (a.cls || '').localeCompare(b.cls || '') || a.name.localeCompare(b.name))
       .forEach(r => {
-        const d = document.createElement('div'); d.className = 'row';
+        const d = document.createElement('div'); d.className = 'row' + (r.status === 'Left' ? ' left' : '');
         const b = document.createElement('b'); b.textContent = r.name;
         const t = document.createElement('span');
         t.className = 'tag ' + (r.error ? 'e' : r.pending ? 'p' : 's');
         t.textContent = r.error ? 'Not accepted: ' + r.error : r.pending ? 'not synced' : 'synced';
+        if (r.status === 'Left') { const lt = document.createElement('span'); lt.className = 'tag e'; lt.textContent = 'LEFT SCHOOL'; b.appendChild(lt); }
         const m = document.createElement('div'); m.className = 'meta';
         m.textContent = (S.cls === OFFICE ? (r.cls || '-') + ' | ' : '') + 'Father: ' + r.father + ' | ' + r.mobile + (ageText(r.dob) ? ' | Age: ' + ageText(r.dob) : '');
         const e = document.createElement('button'); e.className = 'small'; e.textContent = 'Edit'; e.onclick = () => edit(r);
